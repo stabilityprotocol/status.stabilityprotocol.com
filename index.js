@@ -21,11 +21,14 @@ function constructStatusStream(key, url, uptimeData) {
 
   const lastSet = uptimeData[0];
   const color = getColor(lastSet);
+  const colorClasses = getColorClasses(color);
+  const title = key.replaceAll("_", " ").toUpperCase();
 
   const container = templatize("statusContainerTemplate", {
-    title: key,
+    title,
     url: url,
-    color: color,
+    "color-badge": colorClasses.badge,
+    "color-dot": colorClasses.dot,
     status: getStatusText(color),
     upTime: uptimeData.upTime,
   });
@@ -51,12 +54,40 @@ function getColor(uptimeVal) {
         : "partial";
 }
 
+function getColorClasses(color) {
+  const colorMap = {
+    success: {
+      badge: "bg-green-100 text-green-800",
+      dot: "bg-green-500",
+      square: "bg-green-500"
+    },
+    failure: {
+      badge: "bg-red-100 text-red-800",
+      dot: "bg-red-500",
+      square: "bg-red-500"
+    },
+    partial: {
+      badge: "bg-orange-100 text-orange-800",
+      dot: "bg-orange-500",
+      square: "bg-orange-500"
+    },
+    nodata: {
+      badge: "bg-gray-100 text-gray-600",
+      dot: "bg-gray-400",
+      square: "bg-gray-300"
+    }
+  };
+  return colorMap[color] || colorMap.nodata;
+}
+
 function constructStatusSquare(key, date, uptimeVal) {
   const color = getColor(uptimeVal);
-  let square = templatize("statusSquareTemplate", {
-    color: color,
-    tooltip: getTooltip(key, date, color),
-  });
+  const colorClasses = getColorClasses(color);
+  let square = templatize("statusSquareTemplate");
+
+  // Add the background color class
+  square.classList.add(colorClasses.square);
+  square.setAttribute("data-status", color);
 
   const show = () => {
     showTooltip(square, key, date, color);
@@ -87,14 +118,17 @@ function applyTemplateSubstitutions(node, parameters) {
     node.setAttribute(attr, templatizeString(attrVal, parameters));
   }
 
-  if (node.childElementCount == 0) {
-    node.innerText = templatizeString(node.innerText, parameters);
-  } else {
-    const children = Array.from(node.children);
-    children.forEach((n) => {
-      applyTemplateSubstitutions(n, parameters);
-    });
-  }
+  // Process all child nodes, including text nodes
+  const childNodes = Array.from(node.childNodes);
+  childNodes.forEach((childNode) => {
+    if (childNode.nodeType === Node.TEXT_NODE) {
+      // Handle text nodes
+      childNode.textContent = templatizeString(childNode.textContent, parameters);
+    } else if (childNode.nodeType === Node.ELEMENT_NODE) {
+      // Recursively handle element nodes
+      applyTemplateSubstitutions(childNode, parameters);
+    }
+  });
 }
 
 function templatizeString(text, parameters) {
@@ -108,14 +142,14 @@ function templatizeString(text, parameters) {
 
 function getStatusText(color) {
   return color == "nodata"
-    ? "No Data Available"
+    ? "Offline"
     : color == "success"
-      ? "Fully Operational"
+      ? "Online"
       : color == "failure"
-        ? "Major Outage"
+        ? "Offline"
         : color == "partial"
-          ? "Partial Outage"
-          : "Unknown";
+          ? "Offline"
+          : "Offline";
 }
 
 function getStatusDescriptiveText(color) {
@@ -217,6 +251,7 @@ let tooltipTimeout = null;
 function showTooltip(element, key, date, color) {
   clearTimeout(tooltipTimeout);
   const toolTipDiv = document.getElementById("tooltip");
+  const colorClasses = getColorClasses(color);
 
   document.getElementById("tooltipDateTime").innerText = date.toDateString();
   document.getElementById("tooltipDescription").innerText =
@@ -224,19 +259,71 @@ function showTooltip(element, key, date, color) {
 
   const statusDiv = document.getElementById("tooltipStatus");
   statusDiv.innerText = getStatusText(color);
-  statusDiv.className = color;
+  statusDiv.className = `inline-flex items-center px-2 py-1 rounded-full text-xs font-medium mb-2 ${colorClasses.badge}`;
 
-  toolTipDiv.style.top = element.offsetTop + element.offsetHeight + 10;
-  toolTipDiv.style.left =
-    element.offsetLeft + element.offsetWidth / 2 - toolTipDiv.offsetWidth / 2;
-  toolTipDiv.style.opacity = "1";
+  // Position tooltip
+  const rect = element.getBoundingClientRect();
+  const tooltipRect = toolTipDiv.getBoundingClientRect();
+
+  toolTipDiv.style.top = rect.bottom + window.scrollY + 10 + "px";
+  toolTipDiv.style.left = Math.max(10, rect.left + window.scrollX + rect.width / 2 - tooltipRect.width / 2) + "px";
+  toolTipDiv.classList.remove("opacity-0");
+  toolTipDiv.classList.add("opacity-100");
 }
 
 function hideTooltip() {
   tooltipTimeout = setTimeout(() => {
     const toolTipDiv = document.getElementById("tooltip");
-    toolTipDiv.style.opacity = "0";
+    toolTipDiv.classList.add("opacity-0");
+    toolTipDiv.classList.remove("opacity-100");
   }, 1000);
+}
+
+function updateOverallStatus() {
+  // Get all service containers
+  const serviceContainers = document.querySelectorAll('#reports > div');
+  let hasFailure = false;
+  let hasPartial = false;
+  let hasNoData = false;
+  let hasSuccess = false;
+
+  serviceContainers.forEach(container => {
+    // Get the status stream container for this service
+    const statusStream = container.querySelector('[id^="template_clone_"]');
+    if (statusStream) {
+      // Get all status squares and take the last one (most recent day)
+      const statusSquares = statusStream.querySelectorAll('[data-status]');
+      if (statusSquares.length > 0) {
+        const mostRecentSquare = statusSquares[statusSquares.length - 1];
+        const status = mostRecentSquare.getAttribute('data-status');
+        if (status === 'failure') hasFailure = true;
+        else if (status === 'partial') hasPartial = true;
+        else if (status === 'nodata') hasNoData = true;
+        else if (status === 'success') hasSuccess = true;
+      }
+    }
+  });
+
+  const overallStatusEl = document.getElementById('overall-status');
+
+  // Clear and rebuild the content based on priority: failure > partial > nodata > success
+  if (hasFailure) {
+    overallStatusEl.className = 'inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800';
+    overallStatusEl.innerHTML = '<div class="w-2 h-2 bg-red-500 rounded-full mr-2"></div>Major System Outage';
+  } else if (hasPartial) {
+    overallStatusEl.className = 'inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-orange-100 text-orange-800';
+    overallStatusEl.innerHTML = '<div class="w-2 h-2 bg-orange-500 rounded-full mr-2"></div>Partial System Outage';
+  } else if (hasNoData) {
+    overallStatusEl.className = 'inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-600';
+    overallStatusEl.innerHTML = '<div class="w-2 h-2 bg-gray-400 rounded-full mr-2"></div>System Status Unknown';
+  } else if (hasSuccess) {
+    overallStatusEl.className = 'inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800';
+    overallStatusEl.innerHTML = '<div class="w-2 h-2 bg-green-500 rounded-full mr-2"></div>All Systems Operational';
+  } else {
+    // Fallback case if no services are found
+    overallStatusEl.className = 'inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-600';
+    overallStatusEl.innerHTML = '<div class="w-2 h-2 bg-gray-400 rounded-full mr-2"></div>Loading...';
+  }
 }
 
 async function genAllReports() {
@@ -261,6 +348,9 @@ async function genAllReports() {
       cleanUrl.replaceAll('"', "")
     );
   }
+
+  // Update overall status after all reports are loaded
+  setTimeout(updateOverallStatus, 1000);
 }
 
 async function genIncidentReport() {
