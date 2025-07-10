@@ -3,7 +3,7 @@ name: Health Check Cron
 # Controls when the action will run.
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/30 * * * *" # every 30 minutes
 
 jobs:
   health_check_job:
