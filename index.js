@@ -264,9 +264,8 @@ function showTooltip(element, key, date, color) {
   // Position tooltip
   const rect = element.getBoundingClientRect();
   const tooltipRect = toolTipDiv.getBoundingClientRect();
-
-  toolTipDiv.style.top = rect.bottom + window.scrollY + 10 + "px";
-  toolTipDiv.style.left = Math.max(10, rect.left + window.scrollX + rect.width / 2 - tooltipRect.width / 2) + "px";
+  toolTipDiv.style.top = rect.bottom + 10 + "px";
+  toolTipDiv.style.left = Math.max(10, rect.left + rect.width / 2 - tooltipRect.width / 2) + "px";
   toolTipDiv.classList.remove("opacity-0");
   toolTipDiv.classList.add("opacity-100");
 }
