@@ -1,4 +1,6 @@
+const slotHours = 8;
 const maxDays = 30;
+const maxSlots = maxDays * (24 / slotHours); // 90 slots
 
 async function genReportLog(container, key, url) {
   const response = await fetch("logs/" + key + "_report.log");
@@ -14,7 +16,7 @@ async function genReportLog(container, key, url) {
 
 function constructStatusStream(key, url, uptimeData) {
   let streamContainer = templatize("statusStreamContainerTemplate");
-  for (var ii = maxDays - 1; ii >= 0; ii--) {
+  for (var ii = maxSlots - 1; ii >= 0; ii--) {
     let line = constructStatusLine(key, ii, uptimeData[ii]);
     streamContainer.appendChild(line);
   }
@@ -37,11 +39,18 @@ function constructStatusStream(key, url, uptimeData) {
   return container;
 }
 
-function constructStatusLine(key, relDay, upTimeArray) {
-  let date = new Date();
-  date.setDate(date.getDate() - relDay);
+function constructStatusLine(key, relSlot, upTimeArray) {
+  const now = new Date();
+  // Calculate the start of the current slot
+  const currentSlotStart = new Date(now);
+  currentSlotStart.setMinutes(0, 0, 0);
+  const currentHour = currentSlotStart.getHours();
+  currentSlotStart.setHours(currentHour - (currentHour % slotHours));
+  // Go back relSlot slots
+  const slotStart = new Date(currentSlotStart.getTime() - relSlot * slotHours * 3600 * 1000);
+  const slotEnd = new Date(slotStart.getTime() + slotHours * 3600 * 1000);
 
-  return constructStatusSquare(key, date, upTimeArray);
+  return constructStatusSquare(key, slotStart, slotEnd, upTimeArray);
 }
 
 function getColor(uptimeVal) {
@@ -80,7 +89,7 @@ function getColorClasses(color) {
   return colorMap[color] || colorMap.nodata;
 }
 
-function constructStatusSquare(key, date, uptimeVal) {
+function constructStatusSquare(key, slotStart, slotEnd, uptimeVal) {
   const color = getColor(uptimeVal);
   const colorClasses = getColorClasses(color);
   let square = templatize("statusSquareTemplate");
@@ -90,7 +99,7 @@ function constructStatusSquare(key, date, uptimeVal) {
   square.setAttribute("data-status", color);
 
   const show = () => {
-    showTooltip(square, key, date, color);
+    showTooltip(square, key, slotStart, slotEnd, color);
   };
   square.addEventListener("mouseover", show);
   square.addEventListener("mousedown", show);
@@ -156,17 +165,18 @@ function getStatusDescriptiveText(color) {
   return color == "nodata"
     ? "No Data Available: Health check was not performed."
     : color == "success"
-      ? "No downtime recorded today."
+      ? "No downtime recorded in this period."
       : color == "failure"
-        ? "Major outages recorded today."
+        ? "Major outages recorded in this period."
         : color == "partial"
-          ? "Partial outages recorded today."
+          ? "Partial outages recorded in this period."
           : "Unknown";
 }
 
-function getTooltip(key, date, quartile, color) {
-  let statusText = getStatusText(color);
-  return `${key} | ${date.toDateString()} : ${quartile} : ${statusText}`;
+function formatSlotTime(date) {
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const h = date.getHours().toString().padStart(2, "0") + ":00";
+  return `${months[date.getMonth()]} ${date.getDate()}, ${h}`;
 }
 
 function create(tag, className) {
@@ -177,24 +187,26 @@ function create(tag, className) {
 
 function normalizeData(statusLines) {
   const rows = statusLines.split("\n");
-  const dateNormalized = splitRowsByDate(rows);
+  const slotData = splitRowsBySlot(rows);
 
-  let relativeDateMap = {};
+  let relativeSlotMap = {};
   const now = Date.now();
-  for (const [key, val] of Object.entries(dateNormalized)) {
+  for (const [key, val] of Object.entries(slotData)) {
     if (key == "upTime") {
       continue;
     }
 
-    const relDays = getRelativeDays(now, new Date(key).getTime());
-    relativeDateMap[relDays] = getDayAverage(val);
+    const relSlot = getRelativeSlot(now, Number(key));
+    if (relSlot < maxSlots) {
+      relativeSlotMap[relSlot] = getSlotAverage(val);
+    }
   }
 
-  relativeDateMap.upTime = dateNormalized.upTime;
-  return relativeDateMap;
+  relativeSlotMap.upTime = slotData.upTime;
+  return relativeSlotMap;
 }
 
-function getDayAverage(val) {
+function getSlotAverage(val) {
   if (!val || val.length == 0) {
     return null;
   } else {
@@ -202,12 +214,21 @@ function getDayAverage(val) {
   }
 }
 
-function getRelativeDays(date1, date2) {
-  return Math.floor(Math.abs((date1 - date2) / (24 * 3600 * 1000)));
+function getRelativeSlot(now, slotTimestamp) {
+  return Math.floor((now - slotTimestamp) / (slotHours * 3600 * 1000));
 }
 
-function splitRowsByDate(rows) {
-  let dateValues = {};
+function getSlotKey(dateTime) {
+  // Returns the timestamp of the start of the 8h slot this dateTime falls into
+  const d = new Date(dateTime);
+  d.setMinutes(0, 0, 0);
+  const hour = d.getHours();
+  d.setHours(hour - (hour % slotHours));
+  return d.getTime();
+}
+
+function splitRowsBySlot(rows) {
+  let slotValues = {};
   let sum = 0,
     count = 0;
   for (var ii = 0; ii < rows.length; ii++) {
@@ -221,15 +242,12 @@ function splitRowsByDate(rows) {
     const dateTime = new Date(
       Date.parse(dateTimeStr.replaceAll("-", "/") + " GMT")
     );
-    const dateStr = dateTime.toDateString();
+    const slotKey = getSlotKey(dateTime);
 
-    let resultArray = dateValues[dateStr];
+    let resultArray = slotValues[slotKey];
     if (!resultArray) {
       resultArray = [];
-      dateValues[dateStr] = resultArray;
-      if (dateValues.length > maxDays) {
-        break;
-      }
+      slotValues[slotKey] = resultArray;
     }
 
     let result = 0;
@@ -243,17 +261,18 @@ function splitRowsByDate(rows) {
   }
 
   const upTime = count ? ((sum / count) * 100).toFixed(2) + "%" : "--%";
-  dateValues.upTime = upTime;
-  return dateValues;
+  slotValues.upTime = upTime;
+  return slotValues;
 }
 
 let tooltipTimeout = null;
-function showTooltip(element, key, date, color) {
+function showTooltip(element, key, slotStart, slotEnd, color) {
   clearTimeout(tooltipTimeout);
   const toolTipDiv = document.getElementById("tooltip");
   const colorClasses = getColorClasses(color);
 
-  document.getElementById("tooltipDateTime").innerText = date.toDateString();
+  document.getElementById("tooltipDateTime").innerText =
+    formatSlotTime(slotStart) + " – " + formatSlotTime(slotEnd);
   document.getElementById("tooltipDescription").innerText =
     getStatusDescriptiveText(color);
 
