@@ -73,8 +73,9 @@ do
   if [[ $commit == true ]]
   then
     echo $dateTime, $result >> "logs/${key}_report.log"
-    # By default we keep 10000 last log entries.  Feel free to modify this to meet your needs.
-    echo "$(tail -10000 logs/${key}_report.log)" > "logs/${key}_report.log"
+    # Keep only the last 2 months of log entries (date filter, not line count).
+    cutoff=$(date -d '2 months ago' +'%Y-%m-%d')
+    awk -v c="$cutoff" '$1 >= c' "logs/${key}_report.log" > "logs/${key}_report.log.tmp" && mv "logs/${key}_report.log.tmp" "logs/${key}_report.log"
   else
     echo "    $dateTime, $result"
   fi
